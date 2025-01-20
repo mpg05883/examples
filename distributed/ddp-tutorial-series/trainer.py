@@ -36,6 +36,8 @@ class Trainer:
         self.optimizer = optimizer
         self.epochs_ran = 0
         self.snapshots_directory = snapshots_directory
+        if not os.path.exists(self.snapshots_directory):
+            os.makedirs(self.snapshots_directory, exist_ok=True)
         self.snapshot_file_path = os.path.join(
             self.snapshots_directory,
             self.args.snapshot_file_name,
@@ -63,13 +65,11 @@ class Trainer:
             "EPOCHS_RAN": epoch,
         }
         torch.save(snapshot, self.snapshot_file_path)
-        print_rank_0(
-            f"Epoch {epoch + 1} | Snapshot saved to {self.snapshot_file_path}..."
-        )
+        print_rank_0(f"Snapshot saved to {self.snapshot_file_path}...\n")
 
     def _tensors_to_numpy(self, outputs, targets):
-        outputs = outputs.cpu().numpy().squeeze()
-        targets = targets.cpu().numpy().squeeze()
+        outputs = outputs.view(-1).cpu().numpy()
+        targets = targets.view(-1).cpu().numpy()
         return outputs, targets
 
     def _read_columns_from_csv(self, file_name: str = "values.csv", directory="data"):
@@ -90,6 +90,9 @@ class Trainer:
             "true": targets,
         }
         df = pd.DataFrame(data)
+
+        if not os.path.exists(directory):
+            os.makedirs(directory)
         file_path = os.path.join(directory, file_name)
         df.to_csv(file_path, index=False)
 
@@ -106,22 +109,28 @@ class Trainer:
 
         # Create plot
         plt.figure()
-        plt.title("True vs Predicted Values")
         plt.plot(targets, label="True", linewidth=2)
         plt.plot(outputs, label="Pred", linewidth=2)
+        plt.title("True vs Predicted Values")
+        plt.xlabel("x")
+        plt.ylabel("y")
+        plt.legend()
 
         # Save plot
+        if not os.path.exists(directory):
+            os.makedirs(directory)
         file_path = os.path.join(directory, file_name)
         plt.savefig(file_path, bbox_inches="tight")
+
+    def _read_and_plot(self):
+        outputs, targets = self._read_columns_from_csv()
+        self._create_plot(outputs, targets)
 
     def _write_and_plot(self, outputs, targets):
         self._write_tensors_to_csv(outputs, targets)
         self._create_plot(outputs, targets)
 
     def _forward_pass(self, source):
-        # Move tensors to GPU
-        source = source.to(self.local_rank)
-
         # Clear gradients
         self.optimizer.zero_grad()
 
@@ -138,9 +147,12 @@ class Trainer:
 
         return loss, batch_size
 
-    def evaluate(self, epoch: int = 0, val: bool = True):
-        mean_absolute_error = MeanAbsoluteError()
-        mean_squared_error = MeanSquaredError()
+    def evaluate(self, epoch: int = 0, test: bool = True):
+        if is_main_process():
+            self._read_and_plot()
+
+        mean_absolute_error = MeanAbsoluteError().to(self.local_rank)
+        mean_squared_error = MeanSquaredError().to(self.local_rank)
 
         total_mae = 0.0  # Total MAE for a single process
         total_mse = 0.0  # Total MSE for a single process
@@ -155,22 +167,28 @@ class Trainer:
 
         with torch.no_grad():
             # Get correct dataloader
-            dataloader = self.val_loader if val else self.test_loader
+            dataloader = self.test_loader if test else self.val_loader
             dataloader.sampler.set_epoch(epoch)
 
             # Only show progress bar on main process
             if is_main_process():
+                print("\n")
                 pbar = tqdm(total=len(dataloader))
 
             for source, targets in dataloader:
+                # Move tensors to GPU
+                source = source.to(self.local_rank)
+                targets = targets.to(self.local_rank)
                 outputs = self._forward_pass(source)
 
                 y_pred = torch.cat((y_pred, outputs))
                 y_true = torch.cat((y_true, targets))
 
                 batch_size = source.size(0)
-                total_mae += mean_absolute_error(targets, outputs) * batch_size
-                total_mse += mean_squared_error(targets, outputs) * batch_size
+                batch_mae = mean_absolute_error(targets, outputs)
+                batch_mse = mean_squared_error(targets, outputs)
+                total_mae += batch_mae * batch_size
+                total_mse += batch_mse * batch_size
                 num_samples += batch_size
 
                 if is_main_process():
@@ -196,8 +214,6 @@ class Trainer:
         print_rank_0(f"Training mode: {self.model.module.training}", debug=True)
 
         for epoch in range(self.epochs_ran, self.args.num_epochs):
-            print_rank_0(f"===== Epoch {epoch + 1}/{self.args.num_epochs} =====")
-
             # Total training loss on a single process
             total_train_loss = 0.0
 
@@ -207,11 +223,10 @@ class Trainer:
             # Set epoch
             self.train_loader.sampler.set_epoch(epoch)
 
-            # Only display progress bar on global rank 0 process
-            if is_main_process():
-                progress_bar = tqdm(total=len(self.train_loader))
-
             for source, targets in self.train_loader:
+                # Move tensors to GPU
+                source = source.to(self.local_rank)
+                targets = targets.to(self.local_rank)
                 loss, batch_size = self._run_batch(source, targets)
 
                 # Backwards pass
@@ -223,20 +238,14 @@ class Trainer:
                 total_train_loss += loss.item()
                 num_samples += batch_size
 
-                # Update progress bar
-                if is_main_process():
-                    progress_bar.update(1)
-
-            if is_main_process():
-                progress_bar.close()
-
+            # Outside of for loop
             average_train_loss = aggregate_metrics(total_train_loss, num_samples)
-            print_rank_0(
-                f"Epoch {epoch + 1} | Average training loss: {average_train_loss}"
-            )
+            print_rank_0(f"Epoch {epoch + 1} | Train loss: {average_train_loss:.3e}")
 
             if epoch % self.args.save_every == 0:
-                val_loss = self.evaluate(epoch, val=True)
-                print_rank_0(f"Epoch {epoch + 1} | Average validation loss: {val_loss}")
+                mae, mse = self.evaluate(epoch)
+                print_rank_0(
+                    f"Epoch {epoch + 1} | Validation MAE: {mae:.3f}, Validation MSE: {mse:.3f}"
+                )
                 if is_main_process():
                     self._save_snapshot(epoch)
