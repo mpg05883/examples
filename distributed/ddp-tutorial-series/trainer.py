@@ -246,14 +246,33 @@ class Trainer:
                 num_samples += batch_size
 
             # Outside of for loop
+            print_dist(
+                f"Saw {num_samples} samples",
+                debug=True,
+                to_all=True,
+                epoch=epoch,
+            )
+
+            local_train_loss = total_train_loss / num_samples
+            print_dist(
+                f"Local train loss: {local_train_loss:.3f} = {total_train_loss:.3f}/{num_samples}",
+                debug=True,
+                to_all=True,
+                epoch=epoch,
+            )
+
             average_train_loss = aggregate_metrics(total_train_loss, num_samples)
-            print_dist(f"Epoch {epoch + 1} - Train loss: {average_train_loss:.3e}")
+            print_dist(
+                f"Train loss: {average_train_loss:.3e}",
+                epoch=epoch,
+            )
 
             if epoch % self.args.save_every == 0:
                 mae, mse = self.evaluate(epoch)
                 print_dist(
-                    f"Epoch {epoch + 1} - Validation MAE: {mae:.3f}, Validation MSE: {mse:.3f}",
+                    f"Validation MAE: {mae:.3f}, Validation MSE: {mse:.3f}",
                     show_timestamp=True,
+                    epoch=epoch,
                 )
                 if is_main_process():
                     self._save_snapshot(epoch)

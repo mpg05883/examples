@@ -9,7 +9,7 @@ from torch.utils.data.distributed import DistributedSampler
 
 from datautils import MyTrainDataset
 
-logging.basicConfig(level=logging.DEBUG, format="%(message)s")
+logging.basicConfig(level=logging.INFO, format="%(message)s")
 
 
 LOCAL_RANK = int(os.environ["LOCAL_RANK"])
@@ -42,7 +42,11 @@ def _print_helper(
     warning: bool = False,
     error: bool = False,
     critical: bool = False,
+    epoch: int = None,
 ):
+    if epoch is not None:
+        message = f"Epoch {epoch + 1} - {message}"
+
     if show_gpu:
         message = f"GPU {get_global_rank()} | {message}"
 
@@ -74,15 +78,34 @@ def print_dist(
     warning: bool = False,
     error: bool = False,
     critical: bool = False,
+    epoch: int = None,
 ):
     if to_all:
-        _print_helper(message, show_gpu, debug, warning, error, critical)
+        _print_helper(
+            message,
+            True,  # Show GPU when printing to all processses
+            show_timestamp,
+            debug,
+            warning,
+            error,
+            critical,
+            epoch,
+        )
         return
 
     if not is_main_process():
         return
 
-    _print_helper(message, show_gpu, show_timestamp, debug, warning, error, critical)
+    _print_helper(
+        message,
+        show_gpu,
+        show_timestamp,
+        debug,
+        warning,
+        error,
+        critical,
+        epoch,
+    )
 
 
 def load_objects(args):
