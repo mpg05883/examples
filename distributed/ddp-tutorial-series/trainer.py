@@ -60,7 +60,7 @@ class Trainer:
         snapshot = torch.load(self.snapshot_file_path, map_location=map_location)
         self.model.load_state_dict(snapshot["MODEL_STATE"])
         self.epochs_ran = snapshot["EPOCHS_RAN"]
-        print_dist(f"Resuming training from Epoch {self.epochs_ran + 1}")
+        print_dist(f"Resuming training from Epoch {self.epochs_ran + 1}", show_gpu=True)
 
     def _save_snapshot(self, epoch: int):
         snapshot = {
@@ -69,7 +69,7 @@ class Trainer:
         }
         torch.save(snapshot, self.snapshot_file_path)
         print_dist(
-            f"Snapshot saved to {self.snapshot_file_path}...\n",
+            f"Snapshot saved to ./{self.snapshot_file_path}\n",
             show_gpu=True,
             show_timestamp=True,
         )
@@ -81,6 +81,7 @@ class Trainer:
 
     def _read_columns_from_csv(self, file_name: str = "values.csv", directory="data"):
         file_path = os.path.join(directory, file_name)
+        print_dist(f"Reading values from ./{file_path}", show_gpu=True, debug=True)
         df = pd.read_csv(file_path)
         return tuple(df[col] for col in df.columns)
 
@@ -101,6 +102,7 @@ class Trainer:
         if not os.path.exists(directory):
             os.makedirs(directory)
         file_path = os.path.join(directory, file_name)
+        print_dist(f"Writing values to ./{file_path}", show_gpu=True, debug=True)
         df.to_csv(file_path, index=False)
 
     def _create_plot(
@@ -127,6 +129,7 @@ class Trainer:
         if not os.path.exists(directory):
             os.makedirs(directory)
         file_path = os.path.join(directory, file_name)
+        print_dist(f"Saving plot to ./{file_path}", show_gpu=True, debug=True)
         plt.savefig(file_path, bbox_inches="tight")
 
     def _read_and_plot(self):
@@ -137,16 +140,12 @@ class Trainer:
         self._write_tensors_to_csv(outputs, targets)
         self._create_plot(outputs, targets)
 
-    def _forward_pass(self, source):
+    def _run_batch(self, source, targets):
         # Clear gradients
         self.optimizer.zero_grad()
 
         # Forward pass
         outputs = self.model(source)
-        return outputs
-
-    def _run_batch(self, source, targets):
-        outputs = self._forward_pass(source)
 
         loss = F.mse_loss(outputs, targets)
 
@@ -180,13 +179,22 @@ class Trainer:
             # Only show progress bar on main process
             if is_main_process():
                 print_dist("")
-                pbar = tqdm(total=len(dataloader))
+                dataset_name = "test" if test else "val"
+                pbar = tqdm(
+                    total=len(dataloader),
+                    desc=f"Evaluating {dataset_name} set",
+                )
 
             for source, targets in dataloader:
                 # Move tensors to GPU
                 source = source.to(self.local_rank)
                 targets = targets.to(self.local_rank)
-                outputs = self._forward_pass(source)
+
+                # Clear gradients
+                self.optimizer.zero_grad()
+
+                # Forward pass
+                outputs = self.model(source)
 
                 y_pred = torch.cat((y_pred, outputs))
                 y_true = torch.cat((y_true, targets))

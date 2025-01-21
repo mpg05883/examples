@@ -9,7 +9,7 @@ from torch.utils.data.distributed import DistributedSampler
 
 from datautils import MyTrainDataset
 
-logging.basicConfig(level=logging.INFO, format="%(message)s")
+logging.basicConfig(level=logging.DEBUG, format="%(message)s")
 
 
 LOCAL_RANK = int(os.environ["LOCAL_RANK"])
@@ -34,6 +34,21 @@ def get_timestamp():
     return formatted_timestamp
 
 
+def _format_message(
+    message: str,
+    show_gpu: bool = False,
+    show_timestamp: bool = False,
+    epoch: int = None,
+):
+    if epoch is not None:
+        message = f"Epoch {epoch + 1} | {message}"
+    if show_gpu:
+        message = f"GPU {get_global_rank()} | {message}"
+    if show_timestamp:
+        message = f"{get_timestamp()} | {message}"
+    return message
+
+
 def _print_helper(
     message: str,
     show_gpu: bool = False,
@@ -44,15 +59,7 @@ def _print_helper(
     critical: bool = False,
     epoch: int = None,
 ):
-    if epoch is not None:
-        message = f"Epoch {epoch + 1} - {message}"
-
-    if show_gpu:
-        message = f"GPU {get_global_rank()} | {message}"
-
-    if show_timestamp:
-        message = f"{get_timestamp()} | {message}"
-
+    message = _format_message(message, show_gpu, show_timestamp, epoch)
     if critical:
         logging.critical(message)
         return
