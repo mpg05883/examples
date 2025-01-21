@@ -18,10 +18,10 @@ import time
 
 import numpy as np
 import torch
-from torch.distributed import destroy_process_group, init_process_group
+from torch.distributed import destroy_process_group, get_world_size, init_process_group
 
 from trainer import Trainer
-from util import load_objects, print_rank_0
+from util import get_global_rank, load_objects, print_dist
 
 
 def ddp_setup():
@@ -30,8 +30,32 @@ def ddp_setup():
 
 
 def main(args):
+    if not torch.cuda.is_available():
+        print_dist(
+            "ERROR: could not find GPU. At least one GPU is needed to run this"
+            "script.\nEnding now...",
+            critical=True,
+        )
+        return
+
     # Initialize process group
     ddp_setup()
+
+    num_gpus = torch.cuda.device_count()
+    print_dist(f"Number of GPUs avaliable: {num_gpus}", debug=True)
+
+    world_size = get_world_size()
+    print_dist(f"World size: {world_size}", debug=True)
+
+    # Number of processes per node
+    nproc_per_node = world_size // num_gpus
+    print_dist(f"Number of processes per node: {nproc_per_node}", debug=True)
+
+    num_nodes = world_size // nproc_per_node
+    print_dist(f"Number of nodes: {num_nodes}", debug=True)
+
+    global_rank = get_global_rank()
+    print_dist(f"I'm GPU {global_rank}!", debug=True)
 
     # Load dataloaders, model, and optimizer
     train_loader, val_loader, test_loader, model, optimizer = load_objects(args)
@@ -53,10 +77,10 @@ def main(args):
 
     # Test model
     mae, mse = trainer.evaluate(test=True)
-    print_rank_0(f"Test MAE: {mae:.3f}, Test MSE: {mse:.3f}")
+    print_dist(f"Test MAE: {mae:.3f}, Test MSE: {mse:.3f}")
 
     time_elapsed_seconds = np.abs(time.time() - start_time)
-    print_rank_0(f"Finished! Time elapsed: {time_elapsed_seconds:.3f} seconds\n")
+    print_dist(f"Finished! Time elapsed: {time_elapsed_seconds:.3f} seconds\n")
 
     # Clean up process group
     destroy_process_group()

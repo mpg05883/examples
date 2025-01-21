@@ -1,3 +1,4 @@
+import logging
 import os
 from argparse import Namespace
 
@@ -10,7 +11,9 @@ from torch.utils.data import DataLoader
 from torchmetrics import MeanAbsoluteError, MeanSquaredError
 from tqdm import tqdm
 
-from util import aggregate_metrics, aggregate_tensors, is_main_process, print_rank_0
+from util import aggregate_metrics, aggregate_tensors, is_main_process, print_dist
+
+logging.getLogger("matplotlib").setLevel(logging.WARNING)
 
 
 class Trainer:
@@ -47,7 +50,7 @@ class Trainer:
 
     def _load_snapshot(self):
         if not os.path.exists(self.snapshot_file_path):
-            print_rank_0(
+            print_dist(
                 "Cannot find previous snapshot. Starting training from epoch 0",
                 warning=True,
             )
@@ -57,7 +60,7 @@ class Trainer:
         snapshot = torch.load(self.snapshot_file_path, map_location=map_location)
         self.model.load_state_dict(snapshot["MODEL_STATE"])
         self.epochs_ran = snapshot["EPOCHS_RAN"]
-        print_rank_0(f"Resuming training from Epoch {self.epochs_ran + 1}")
+        print_dist(f"Resuming training from Epoch {self.epochs_ran + 1}")
 
     def _save_snapshot(self, epoch: int):
         snapshot = {
@@ -65,7 +68,11 @@ class Trainer:
             "EPOCHS_RAN": epoch,
         }
         torch.save(snapshot, self.snapshot_file_path)
-        print_rank_0(f"Snapshot saved to {self.snapshot_file_path}...\n")
+        print_dist(
+            f"Snapshot saved to {self.snapshot_file_path}...\n",
+            show_gpu=True,
+            show_timestamp=True,
+        )
 
     def _tensors_to_numpy(self, outputs, targets):
         outputs = outputs.view(-1).cpu().numpy()
@@ -163,7 +170,7 @@ class Trainer:
 
         # Set to evaluation mode
         self.model.eval()
-        print_rank_0(f"Evaluation mode: {not self.model.module.training}", debug=True)
+        print_dist(f"Evaluation mode: {not self.model.module.training}", debug=True)
 
         with torch.no_grad():
             # Get correct dataloader
@@ -172,7 +179,7 @@ class Trainer:
 
             # Only show progress bar on main process
             if is_main_process():
-                print("\n")
+                print_dist("")
                 pbar = tqdm(total=len(dataloader))
 
             for source, targets in dataloader:
@@ -211,7 +218,7 @@ class Trainer:
     def train(self):
         # Set to training mode
         self.model.train()
-        print_rank_0(f"Training mode: {self.model.module.training}", debug=True)
+        print_dist(f"Training mode: {self.model.module.training}", debug=True)
 
         for epoch in range(self.epochs_ran, self.args.num_epochs):
             # Total training loss on a single process
@@ -240,12 +247,13 @@ class Trainer:
 
             # Outside of for loop
             average_train_loss = aggregate_metrics(total_train_loss, num_samples)
-            print_rank_0(f"Epoch {epoch + 1} | Train loss: {average_train_loss:.3e}")
+            print_dist(f"Epoch {epoch + 1} - Train loss: {average_train_loss:.3e}")
 
             if epoch % self.args.save_every == 0:
                 mae, mse = self.evaluate(epoch)
-                print_rank_0(
-                    f"Epoch {epoch + 1} | Validation MAE: {mae:.3f}, Validation MSE: {mse:.3f}"
+                print_dist(
+                    f"Epoch {epoch + 1} - Validation MAE: {mae:.3f}, Validation MSE: {mse:.3f}",
+                    show_timestamp=True,
                 )
                 if is_main_process():
                     self._save_snapshot(epoch)

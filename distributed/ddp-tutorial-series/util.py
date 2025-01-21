@@ -1,5 +1,6 @@
 import logging
 import os
+from datetime import datetime
 
 import torch
 from torch.distributed import all_gather, get_world_size
@@ -8,37 +9,80 @@ from torch.utils.data.distributed import DistributedSampler
 
 from datautils import MyTrainDataset
 
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s: %(message)s",
-    datefmt="%m/%d/%Y %I:%M:%S%p",
-)
+logging.basicConfig(level=logging.DEBUG, format="%(message)s")
+
 
 LOCAL_RANK = int(os.environ["LOCAL_RANK"])
+GLOBAL_RANK = int(os.environ["RANK"])
+
+
+def get_global_rank():
+    return GLOBAL_RANK
+
+
+def get_local_rank():
+    return LOCAL_RANK
 
 
 def is_main_process():
-    return int(os.environ["RANK"]) == 0
+    return GLOBAL_RANK == 0
 
 
-def print_rank_0(
+def get_timestamp():
+    current_timestamp = datetime.now()
+    formatted_timestamp = current_timestamp.strftime("%m/%d/%Y %H:%M:%S")
+    return formatted_timestamp
+
+
+def _print_helper(
     message: str,
+    show_gpu: bool = False,
+    show_timestamp: bool = False,
     debug: bool = False,
     warning: bool = False,
+    error: bool = False,
     critical: bool = False,
 ):
-    if not is_main_process():
-        return
+    if show_gpu:
+        message = f"GPU {get_global_rank()} | {message}"
+
+    if show_timestamp:
+        message = f"{get_timestamp()} | {message}"
+
     if critical:
         logging.critical(message)
         return
-    if warning:
+    elif error:
+        logging.error(message)
+        return
+    elif warning:
         logging.warning(message)
         return
-    if debug:
+    elif debug:
         logging.debug(message)
         return
-    logging.critical(message)
+    else:
+        logging.info(message)
+
+
+def print_dist(
+    message: str,
+    to_all: bool = False,
+    show_gpu: bool = False,
+    show_timestamp: bool = False,
+    debug: bool = False,
+    warning: bool = False,
+    error: bool = False,
+    critical: bool = False,
+):
+    if to_all:
+        _print_helper(message, show_gpu, debug, warning, error, critical)
+        return
+
+    if not is_main_process():
+        return
+
+    _print_helper(message, show_gpu, show_timestamp, debug, warning, error, critical)
 
 
 def load_objects(args):
